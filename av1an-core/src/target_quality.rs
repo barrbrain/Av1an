@@ -60,17 +60,24 @@ impl<'a> TargetQuality<'a> {
     q_list.push(middle_point);
     let last_q = middle_point;
 
-    let mut score = read_weighted_vmaf(self.vmaf_probe(chunk, last_q as usize), 0.25).unwrap();
-    vmaf_cq.push((score, last_q));
+    let mut bytes = 0;
+    let mut score =
+      read_weighted_vmaf(self.vmaf_probe(chunk, last_q as usize, &mut bytes), 0.25).unwrap();
+    let mut rate = bytes as f64 * 8. * self.probing_rate as f64 / chunk.frames as f64;
+    vmaf_cq.push((score, rate, last_q));
 
     // Initialize search boundary
     let mut vmaf_lower = score;
     let mut vmaf_upper = score;
     let mut vmaf_cq_lower = last_q;
     let mut vmaf_cq_upper = last_q;
+    let mut rate_lower = rate;
+    let mut rate_upper = rate;
+
+    let target_rate = 6_000_000. / 24.;
 
     // Branch
-    let next_q = if score < self.target {
+    let next_q = if score < self.target && rate < target_rate {
       self.min_q
     } else {
       self.max_q
@@ -79,11 +86,12 @@ impl<'a> TargetQuality<'a> {
     q_list.push(next_q);
 
     // Edge case check
-    score = read_weighted_vmaf(self.vmaf_probe(chunk, next_q as usize), 0.25).unwrap();
-    vmaf_cq.push((score, next_q));
+    score = read_weighted_vmaf(self.vmaf_probe(chunk, next_q as usize, &mut bytes), 0.25).unwrap();
+    rate = bytes as f64 * 8. * self.probing_rate as f64 / chunk.frames as f64;
+    vmaf_cq.push((score, rate, next_q));
 
-    if (next_q == self.min_q && score < self.target)
-      || (next_q == self.max_q && score > self.target)
+    if (next_q == self.min_q && score < self.target && rate < target_rate)
+      || (next_q == self.max_q && score > self.target && rate > target_rate)
     {
       log_probes(
         &mut vmaf_cq,
@@ -92,6 +100,7 @@ impl<'a> TargetQuality<'a> {
         &chunk.name(),
         next_q,
         score,
+        rate,
         if score < self.target {
           Skip::Low
         } else {
@@ -102,12 +111,14 @@ impl<'a> TargetQuality<'a> {
     }
 
     // Set boundary
-    if score < self.target {
+    if score < self.target && rate < target_rate {
       vmaf_lower = score;
       vmaf_cq_lower = next_q;
+      rate_lower = rate;
     } else {
       vmaf_upper = score;
       vmaf_cq_upper = next_q;
+      rate_upper = rate;
     }
 
     // VMAF search
@@ -120,29 +131,42 @@ impl<'a> TargetQuality<'a> {
         self.target,
       );
 
+      let new_rate = weighted_rate_search(
+        f64::from(vmaf_cq_lower),
+        rate_lower,
+        f64::from(vmaf_cq_upper),
+        rate_upper,
+        target_rate,
+      );
+
+      let new_point = new_point.max(new_rate);
+
       if vmaf_cq
         .iter()
-        .map(|(_, x)| *x)
+        .map(|(_, _, x)| *x)
         .any(|x| x == new_point as u32)
       {
         break;
       }
 
       q_list.push(new_point as u32);
-      score = read_weighted_vmaf(self.vmaf_probe(chunk, new_point), 0.25).unwrap();
-      vmaf_cq.push((score, new_point as u32));
+      score = read_weighted_vmaf(self.vmaf_probe(chunk, new_point, &mut bytes), 0.25).unwrap();
+      rate = bytes as f64 * 8. * self.probing_rate as f64 / chunk.frames as f64;
+      vmaf_cq.push((score, rate, new_point as u32));
 
       // Update boundary
       if score < self.target {
         vmaf_lower = score;
         vmaf_cq_lower = new_point as u32;
+        rate_lower = rate;
       } else {
         vmaf_upper = score;
         vmaf_cq_upper = new_point as u32;
+        rate_upper = rate;
       }
     }
 
-    let (q, q_vmaf) = interpolated_target_q(vmaf_cq.clone(), self.target);
+    let (q, q_vmaf, q_rate) = interpolated_target_q(vmaf_cq.clone(), self.target, target_rate);
     log_probes(
       &mut vmaf_cq,
       frames as u32,
@@ -150,13 +174,14 @@ impl<'a> TargetQuality<'a> {
       &chunk.name(),
       q as u32,
       q_vmaf,
+      q_rate,
       Skip::None,
     );
 
     q as u32
   }
 
-  fn vmaf_probe(&self, chunk: &Chunk, q: usize) -> String {
+  fn vmaf_probe(&self, chunk: &Chunk, q: usize, bytes: &mut u64) -> String {
     let vmaf_threads = if self.vmaf_threads == 0 {
       vmaf_auto_threads(self.workers)
     } else {
@@ -246,6 +271,8 @@ impl<'a> TargetQuality<'a> {
     )
     .unwrap();
 
+    *bytes = probe_name.metadata().unwrap().len();
+
     fl_path
   }
 
@@ -257,6 +284,15 @@ impl<'a> TargetQuality<'a> {
 pub fn weighted_search(num1: f64, vmaf1: f64, num2: f64, vmaf2: f64, target: f64) -> usize {
   let dif1 = (transform_vmaf(target as f64) - transform_vmaf(vmaf2)).abs();
   let dif2 = (transform_vmaf(target as f64) - transform_vmaf(vmaf1)).abs();
+
+  let tot = dif1 + dif2;
+
+  num1.mul_add(dif1 / tot, num2 * (dif2 / tot)).round() as usize
+}
+
+pub fn weighted_rate_search(num1: f64, rate1: f64, num2: f64, rate2: f64, target: f64) -> usize {
+  let dif1 = target.ln() - rate2.ln();
+  let dif2 = rate1.ln() - target.ln();
 
   let tot = dif1 + dif2;
 
@@ -286,28 +322,57 @@ pub fn vmaf_auto_threads(workers: usize) -> usize {
 }
 
 /// Use linear interpolation to get q/crf values closest to the target value
-pub fn interpolate_target_q(scores: Vec<(f64, u32)>, target: f64) -> Result<f64, Error> {
+pub fn interpolate_target_q(
+  scores: Vec<(f64, f64, u32)>,
+  target_vmaf: f64,
+  target_rate: f64,
+) -> Result<f64, Error> {
   let mut sorted = scores;
   sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
   let keys = sorted
     .iter()
-    .map(|(x, y)| Key::new(*x, f64::from(*y), Interpolation::Linear))
+    .map(|(x, _, y)| Key::new(*x, f64::from(*y), Interpolation::Linear))
+    .collect();
+
+  let spline = Spline::from_vec(keys);
+  let q_vmaf = spline.clamped_sample(target_vmaf).unwrap();
+
+  sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+  let keys = sorted
+    .iter()
+    .map(|(_, x, y)| Key::new(*x, f64::from(*y), Interpolation::Linear))
+    .collect();
+
+  let spline = Spline::from_vec(keys);
+  let q_rate = spline.clamped_sample(target_rate).unwrap_or(q_vmaf);
+
+  Ok(q_vmaf.max(q_rate))
+}
+
+/// Use linear interpolation to get vmaf value that expected from q
+pub fn interpolate_target_vmaf(scores: Vec<(f64, f64, u32)>, q: f64) -> Result<f64, Error> {
+  let mut sorted = scores;
+  sorted.sort_by(|(a, _, _), (b, _, _)| a.partial_cmp(b).unwrap_or(Ordering::Less));
+
+  let keys = sorted
+    .iter()
+    .map(|f| Key::new(f64::from(f.2), f.0 as f64, Interpolation::Linear))
     .collect();
 
   let spline = Spline::from_vec(keys);
 
-  Ok(spline.sample(target).unwrap())
+  Ok(spline.sample(q).unwrap())
 }
 
-/// Use linear interpolation to get vmaf value that expected from q
-pub fn interpolate_target_vmaf(scores: Vec<(f64, u32)>, q: f64) -> Result<f64, Error> {
+pub fn interpolate_target_rate(scores: Vec<(f64, f64, u32)>, q: f64) -> Result<f64, Error> {
   let mut sorted = scores;
-  sorted.sort_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(Ordering::Less));
+  sorted.sort_by(|(_, a, _), (_, b, _)| a.partial_cmp(b).unwrap_or(Ordering::Less));
 
   let keys = sorted
     .iter()
-    .map(|f| Key::new(f64::from(f.1), f.0 as f64, Interpolation::Linear))
+    .map(|f| Key::new(f64::from(f.2), f.1 as f64, Interpolation::Linear))
     .collect();
 
   let spline = Spline::from_vec(keys);
@@ -323,15 +388,16 @@ pub enum Skip {
 }
 
 pub fn log_probes(
-  vmaf_cq_scores: &mut [(f64, u32)],
+  vmaf_cq_scores: &mut [(f64, f64, u32)],
   frames: u32,
   probing_rate: u32,
   name: &str,
   target_q: u32,
   target_vmaf: f64,
+  target_rate: f64,
   skip: Skip,
 ) {
-  vmaf_cq_scores.sort_by_key(|(_score, q)| *q);
+  vmaf_cq_scores.sort_by_key(|(_score, _rate, q)| *q);
 
   info!("Chunk: {}, Rate: {}, Fr {}", name, probing_rate, frames);
   info!(
@@ -343,7 +409,10 @@ pub fn log_probes(
       Skip::None => "",
     }
   );
-  info!("Target Q: {:.0} VMAF: {:.2}", target_q, target_vmaf);
+  info!(
+    "Target Q: {:.0} VMAF: {:.2} Rate: {:.0}",
+    target_q, target_vmaf, target_rate
+  );
 }
 
 pub const fn adapt_probing_rate(rate: usize) -> usize {
@@ -353,10 +422,15 @@ pub const fn adapt_probing_rate(rate: usize) -> usize {
   }
 }
 
-pub fn interpolated_target_q(scores: Vec<(f64, u32)>, target: f64) -> (f64, f64) {
-  let q = interpolate_target_q(scores.clone(), target).unwrap();
+pub fn interpolated_target_q(
+  scores: Vec<(f64, f64, u32)>,
+  target_vmaf: f64,
+  target_rate: f64,
+) -> (f64, f64, f64) {
+  let q = interpolate_target_q(scores.clone(), target_vmaf, target_rate).unwrap();
 
-  let vmaf = interpolate_target_vmaf(scores, q).unwrap();
+  let vmaf = interpolate_target_vmaf(scores.clone(), q).unwrap();
+  let rate = interpolate_target_rate(scores, q).unwrap();
 
-  (q, vmaf)
+  (q, vmaf, rate)
 }
