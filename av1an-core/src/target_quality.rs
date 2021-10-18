@@ -62,7 +62,7 @@ impl<'a> TargetQuality<'a> {
 
     let mut bytes = 0;
     let mut score =
-      read_weighted_vmaf(self.vmaf_probe(chunk, last_q as usize, &mut bytes), 0.25).unwrap();
+      read_weighted_vmaf(self.vmaf_probe(chunk, last_q as usize, &mut bytes), 0.125).unwrap();
     let mut rate = bytes as f64 * 8. * self.probing_rate as f64 / chunk.frames as f64;
     vmaf_cq.push((score, rate, last_q));
 
@@ -86,7 +86,7 @@ impl<'a> TargetQuality<'a> {
     q_list.push(next_q);
 
     // Edge case check
-    score = read_weighted_vmaf(self.vmaf_probe(chunk, next_q as usize, &mut bytes), 0.25).unwrap();
+    score = read_weighted_vmaf(self.vmaf_probe(chunk, next_q as usize, &mut bytes), 0.125).unwrap();
     rate = bytes as f64 * 8. * self.probing_rate as f64 / chunk.frames as f64;
     vmaf_cq.push((score, rate, next_q));
 
@@ -150,7 +150,7 @@ impl<'a> TargetQuality<'a> {
       }
 
       q_list.push(new_point as u32);
-      score = read_weighted_vmaf(self.vmaf_probe(chunk, new_point, &mut bytes), 0.25).unwrap();
+      score = read_weighted_vmaf(self.vmaf_probe(chunk, new_point, &mut bytes), 0.125).unwrap();
       rate = bytes as f64 * 8. * self.probing_rate as f64 / chunk.frames as f64;
       vmaf_cq.push((score, rate, new_point as u32));
 

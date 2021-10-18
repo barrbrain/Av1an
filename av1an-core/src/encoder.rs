@@ -435,9 +435,8 @@ impl Encoder {
         "16",
         "--quantizer",
         q.to_string(),
-        "--low-latency",
         "--rdo-lookahead-frames",
-        "5",
+        "16",
         "--no-scene-detection",
       ],
       Self::vpx => into_vec![
