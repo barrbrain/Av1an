@@ -172,13 +172,13 @@ impl<'a> TargetQuality<'a> {
       frames as u32,
       self.probing_rate as u32,
       &chunk.name(),
-      q as u32,
+      q.round() as u32,
       q_vmaf,
       q_rate,
       Skip::None,
     );
 
-    q as u32
+    q.round() as u32
   }
 
   fn vmaf_probe(&self, chunk: &Chunk, q: usize, bytes: &mut u64) -> String {
@@ -332,21 +332,21 @@ pub fn interpolate_target_q(
 
   let keys = sorted
     .iter()
-    .map(|(x, _, y)| Key::new(*x, f64::from(*y), Interpolation::Linear))
+    .map(|(x, _, y)| Key::new(transform_vmaf(*x), f64::from(*y), Interpolation::Linear))
     .collect();
 
   let spline = Spline::from_vec(keys);
-  let q_vmaf = spline.clamped_sample(target_vmaf).unwrap();
+  let q_vmaf = spline.clamped_sample(transform_vmaf(target_vmaf)).unwrap();
 
   sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
   let keys = sorted
     .iter()
-    .map(|(_, x, y)| Key::new(*x, f64::from(*y), Interpolation::Linear))
+    .map(|(_, x, y)| Key::new((*x).ln(), f64::from(*y), Interpolation::Linear))
     .collect();
 
   let spline = Spline::from_vec(keys);
-  let q_rate = spline.clamped_sample(target_rate).unwrap_or(q_vmaf);
+  let q_rate = spline.clamped_sample(target_rate.ln()).unwrap_or(q_vmaf);
 
   Ok(q_vmaf.max(q_rate))
 }
@@ -363,7 +363,7 @@ pub fn interpolate_target_vmaf(scores: Vec<(f64, f64, u32)>, q: f64) -> Result<f
 
   let spline = Spline::from_vec(keys);
 
-  Ok(spline.sample(q).unwrap())
+  Ok(spline.clamped_sample(q).unwrap())
 }
 
 pub fn interpolate_target_rate(scores: Vec<(f64, f64, u32)>, q: f64) -> Result<f64, Error> {
@@ -377,7 +377,7 @@ pub fn interpolate_target_rate(scores: Vec<(f64, f64, u32)>, q: f64) -> Result<f
 
   let spline = Spline::from_vec(keys);
 
-  Ok(spline.sample(q).unwrap())
+  Ok(spline.clamped_sample(q).unwrap())
 }
 
 #[derive(Copy, Clone)]
