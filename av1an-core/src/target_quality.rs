@@ -63,12 +63,6 @@ impl<'a> TargetQuality<'a> {
     let mut score = read_weighted_vmaf(self.vmaf_probe(chunk, last_q as usize), 0.25).unwrap();
     vmaf_cq.push((score, last_q));
 
-    // Initialize search boundary
-    let mut vmaf_lower = score;
-    let mut vmaf_upper = score;
-    let mut vmaf_cq_lower = last_q;
-    let mut vmaf_cq_upper = last_q;
-
     // Branch
     let next_q = if score < self.target {
       self.min_q
@@ -101,24 +95,9 @@ impl<'a> TargetQuality<'a> {
       return next_q;
     }
 
-    // Set boundary
-    if score < self.target {
-      vmaf_lower = score;
-      vmaf_cq_lower = next_q;
-    } else {
-      vmaf_upper = score;
-      vmaf_cq_upper = next_q;
-    }
-
     // VMAF search
     for _ in 0..self.probes - 2 {
-      let new_point = weighted_search(
-        f64::from(vmaf_cq_lower),
-        vmaf_lower,
-        f64::from(vmaf_cq_upper),
-        vmaf_upper,
-        self.target,
-      );
+      let new_point = weighted_search(&vmaf_cq, self.target).0;
 
       if vmaf_cq
         .iter()
@@ -129,17 +108,8 @@ impl<'a> TargetQuality<'a> {
       }
 
       q_list.push(new_point as u32);
-      score = read_weighted_vmaf(self.vmaf_probe(chunk, new_point), 0.25).unwrap();
+      score = read_weighted_vmaf(self.vmaf_probe(chunk, new_point as usize), 0.25).unwrap();
       vmaf_cq.push((score, new_point as u32));
-
-      // Update boundary
-      if score < self.target {
-        vmaf_lower = score;
-        vmaf_cq_lower = new_point as u32;
-      } else {
-        vmaf_upper = score;
-        vmaf_cq_upper = new_point as u32;
-      }
     }
 
     let (q, q_vmaf) = interpolated_target_q(vmaf_cq.clone(), self.target);
@@ -254,13 +224,13 @@ impl<'a> TargetQuality<'a> {
   }
 }
 
-pub fn weighted_search(num1: f64, vmaf1: f64, num2: f64, vmaf2: f64, target: f64) -> usize {
-  let dif1 = (transform_vmaf(target as f64) - transform_vmaf(vmaf2)).abs();
-  let dif2 = (transform_vmaf(target as f64) - transform_vmaf(vmaf1)).abs();
-
-  let tot = dif1 + dif2;
-
-  num1.mul_add(dif1 / tot, num2 * (dif2 / tot)).round() as usize
+pub fn weighted_search(vmaf_cq_scores: &[(f64, u32)], target: f64) -> (u32, f64) {
+  let points = vmaf_cq_scores
+    .iter()
+    .map(|(vmaf, cq)| (*cq, transform_vmaf(*vmaf)))
+    .collect::<Vec<_>>();
+  let p = lagrange_bisect(&points, transform_vmaf(target));
+  (p.0, inverse_transform_vmaf(p.1))
 }
 
 pub fn transform_vmaf(vmaf: f64) -> f64 {
@@ -270,6 +240,11 @@ pub fn transform_vmaf(vmaf: f64) -> f64 {
   } else {
     9.2
   }
+}
+
+pub fn inverse_transform_vmaf(y: f64) -> f64 {
+  let x: f64 = (-y).exp();
+  100.0 * (1.0 - x)
 }
 
 /// Returns auto detected amount of threads used for vmaf calculation
