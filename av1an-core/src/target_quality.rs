@@ -6,8 +6,7 @@ use crate::{
   Encoder,
 };
 use ffmpeg_next::format::Pixel;
-use splines::{Interpolation, Key, Spline};
-use std::{cmp, cmp::Ordering, convert::TryInto, fmt::Error, path::Path, process::Stdio};
+use std::{cmp, convert::TryInto, path::Path, process::Stdio};
 
 // TODO: just make it take a reference to a `Project`
 pub struct TargetQuality<'a> {
@@ -112,7 +111,7 @@ impl<'a> TargetQuality<'a> {
       vmaf_cq.push((score, new_point as u32));
     }
 
-    let (q, q_vmaf) = interpolated_target_q(vmaf_cq.clone(), self.target);
+    let (q, q_vmaf) = weighted_search(&vmaf_cq, self.target);
     log_probes(
       &mut vmaf_cq,
       frames as u32,
@@ -260,36 +259,6 @@ pub fn vmaf_auto_threads(workers: usize) -> usize {
   )
 }
 
-/// Use linear interpolation to get q/crf values closest to the target value
-pub fn interpolate_target_q(scores: Vec<(f64, u32)>, target: f64) -> Result<f64, Error> {
-  let mut sorted = scores;
-  sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-
-  let keys = sorted
-    .iter()
-    .map(|(x, y)| Key::new(*x, f64::from(*y), Interpolation::Linear))
-    .collect();
-
-  let spline = Spline::from_vec(keys);
-
-  Ok(spline.sample(target).unwrap())
-}
-
-/// Use linear interpolation to get vmaf value that expected from q
-pub fn interpolate_target_vmaf(scores: Vec<(f64, u32)>, q: f64) -> Result<f64, Error> {
-  let mut sorted = scores;
-  sorted.sort_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(Ordering::Less));
-
-  let keys = sorted
-    .iter()
-    .map(|f| Key::new(f64::from(f.1), f.0 as f64, Interpolation::Linear))
-    .collect();
-
-  let spline = Spline::from_vec(keys);
-
-  Ok(spline.sample(q).unwrap())
-}
-
 #[derive(Copy, Clone)]
 pub enum Skip {
   High,
@@ -326,14 +295,6 @@ pub const fn adapt_probing_rate(rate: usize) -> usize {
     1..=4 => rate,
     _ => 4,
   }
-}
-
-pub fn interpolated_target_q(scores: Vec<(f64, u32)>, target: f64) -> (f64, f64) {
-  let q = interpolate_target_q(scores.clone(), target).unwrap();
-
-  let vmaf = interpolate_target_vmaf(scores, q).unwrap();
-
-  (q, vmaf)
 }
 
 #[allow(unused)]
