@@ -219,7 +219,15 @@ impl EncodeArgs {
 
     let video_params = chunk.video_params.clone();
 
-    let mut enc_cmd = if chunk.passes == 1 {
+    let mut enc_cmd = if self.passes > 2 {
+      chunk.encoder.compose_n_pass(
+        video_params,
+        fpf_file.to_str().unwrap(),
+        chunk.output(),
+        current_pass,
+        self.passes,
+      )
+    } else if self.passes == 1 {
       chunk
         .encoder
         .compose_1_1_pass(video_params, chunk.output(), chunk.frames())
@@ -268,7 +276,11 @@ impl EncodeArgs {
         let create_ffmpeg_pipe = |pipe_from: Stdio, source_pipe_stderr: ChildStderr| {
           let ffmpeg_pipe = compose_ffmpeg_pipe(
             self.ffmpeg_filter_args.as_slice(),
-            self.output_pix_format.format,
+            if self.passes > 2 && current_pass < 3 {
+              Pixel::YUV420P
+            } else {
+              self.output_pix_format.format
+            },
           );
 
           let mut ffmpeg_pipe = if let [ffmpeg, args @ ..] = &*ffmpeg_pipe {

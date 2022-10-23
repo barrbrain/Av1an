@@ -241,6 +241,57 @@ impl Encoder {
     }
   }
 
+  pub fn compose_n_pass(
+    self,
+    params: Vec<String>,
+    fpf: &str,
+    output: String,
+    current_pass: u8,
+    passes: u8,
+  ) -> Vec<String> {
+    match self {
+      Self::rav1e if current_pass == 1 => chain!(
+        into_array!["rav1e", "-", "-y", "--quiet"],
+        params,
+        into_array![
+          "--first-pass",
+          format!("{}.{}.stat", fpf, current_pass),
+          "--output",
+          NULL,
+          "--speed",
+          "10"
+        ]
+      )
+      .collect(),
+      Self::rav1e if current_pass < passes => chain!(
+        into_array!["rav1e", "-", "-y", "--quiet"],
+        params,
+        into_array![
+          "--second-pass",
+          format!("{}.{}.stat", fpf, current_pass - 1),
+          "--first-pass",
+          format!("{}.{}.stat", fpf, current_pass),
+          "--output",
+          NULL,
+          "--speed",
+          "8"
+        ]
+      )
+      .collect(),
+      _ => chain!(
+        into_array!["rav1e", "-", "-y", "--quiet"],
+        params,
+        into_array![
+          "--second-pass",
+          format!("{}.{}.stat", fpf, current_pass - 1),
+          "--output",
+          output
+        ]
+      )
+      .collect(),
+    }
+  }
+
   /// Composes 2st pass command for 2 pass encoding
   pub fn compose_2_2_pass(
     self,
