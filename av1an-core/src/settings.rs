@@ -235,7 +235,15 @@ impl EncodeArgs {
       // In aomenc for duplicate arguments, whichever is specified last takes precedence.
       video_params.push("--enable-tpl-model=0".to_string());
     }
-    let mut enc_cmd = if passes == 1 {
+    let mut enc_cmd = if passes > 2 {
+      encoder.compose_n_pass(
+        video_params,
+        fpf_file.to_str().unwrap(),
+        chunk.output(),
+        current_pass,
+        passes,
+      )
+    } else if passes == 1 {
       encoder.compose_1_1_pass(video_params, chunk.output())
     } else if current_pass == 1 {
       encoder.compose_1_2_pass(video_params, fpf_file.to_str().unwrap())
@@ -273,7 +281,11 @@ impl EncodeArgs {
         let create_ffmpeg_pipe = |pipe_from: Stdio, source_pipe_stderr: ChildStderr| {
           let ffmpeg_pipe = compose_ffmpeg_pipe(
             self.ffmpeg_filter_args.as_slice(),
-            self.output_pix_format.format,
+            if passes > 2 && current_pass < 3 {
+              Pixel::YUV420P
+            } else {
+              self.output_pix_format.format
+            },
           );
 
           let mut ffmpeg_pipe = if let [ffmpeg, args @ ..] = &*ffmpeg_pipe {

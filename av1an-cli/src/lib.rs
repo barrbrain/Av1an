@@ -257,7 +257,7 @@ pub struct CliOpts {
   ///
   /// When using aom or vpx with RT mode (--rt), one-pass mode is always used regardless of the
   /// value specified by this flag (as RT mode in aom and vpx only supports one-pass encoding).
-  #[clap(short, long, possible_values = &["1", "2"], help_heading = "ENCODING")]
+  #[clap(short, long, possible_values = &["1", "2", "3", "4"], help_heading = "ENCODING")]
   pub passes: Option<u8>,
 
   /// Audio encoding parameters (ffmpeg syntax)
