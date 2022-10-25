@@ -252,20 +252,18 @@ impl Encoder {
     match self {
       Self::rav1e if current_pass == 1 => chain!(
         into_array!["rav1e", "-", "-y", "--quiet"],
-        params,
+        self.speed_command(params, 10),
         into_array![
           "--first-pass",
           format!("{}.{}.stat", fpf, current_pass),
           "--output",
           NULL,
-          "--speed",
-          "10"
         ]
       )
       .collect(),
       Self::rav1e if current_pass < passes => chain!(
         into_array!["rav1e", "-", "-y", "--quiet"],
-        params,
+        self.speed_command(params, 8),
         into_array![
           "--second-pass",
           format!("{}.{}.stat", fpf, current_pass - 1),
@@ -273,8 +271,6 @@ impl Encoder {
           format!("{}.{}.stat", fpf, current_pass),
           "--output",
           NULL,
-          "--speed",
-          "8"
         ]
       )
       .collect(),
@@ -604,6 +600,52 @@ impl Encoder {
       params[replace_index] = replace_q;
     } else {
       let args = self.insert_q(q);
+      params.extend_from_slice(&args);
+    }
+
+    params
+  }
+
+  /// Returns function pointer used for matching Q/CRF arguments in command line
+  fn s_match_fn(self) -> fn(&str) -> bool {
+    match self {
+      Self::rav1e => |p| matches!(p, "--speed" | "-s"),
+      _ => |_| false,
+    }
+  }
+
+  fn replace_s(self, index: usize, s: usize) -> (usize, String) {
+    match self {
+      Self::aom | Self::vpx => (index, format!("--cpu-used={}", s)),
+      Self::rav1e | Self::svt_av1 | Self::x265 | Self::x264 => (index + 1, format!("{}", s)),
+    }
+  }
+
+  fn insert_s(self, s: usize) -> ArrayVec<String, 2> {
+    let mut output = ArrayVec::new();
+    match self {
+      Self::aom | Self::vpx => {
+        output.push(format!("--cpu-used={}", s));
+      }
+      Self::rav1e => {
+        output.push("--speed".into());
+        output.push(format!("{}", s));
+      }
+      Self::svt_av1 | Self::x264 | Self::x265 => {
+        output.push("--preset".into());
+        output.push(format!("{}", s));
+      }
+    }
+    output
+  }
+
+  pub fn speed_command(self, mut params: Vec<String>, s: usize) -> Vec<String> {
+    let index = list_index(&params, self.s_match_fn());
+    if let Some(index) = index {
+      let (replace_index, replace_s) = self.replace_s(index, s);
+      params[replace_index] = replace_s;
+    } else {
+      let args = self.insert_s(s);
       params.extend_from_slice(&args);
     }
 
