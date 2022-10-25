@@ -855,6 +855,8 @@ properly into a mkv file. Specify mkvmerge as the concatenation method by settin
       "error",
       "-i",
       src_path,
+      "-vsync",
+      "passthrough",
       "-vf",
       format!(
         "select=between(n\\,{}\\,{}),setpts=PTS-STARTPTS",
